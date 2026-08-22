@@ -1,129 +1,1256 @@
-name: Build Kernel 5.15 SukiSU-Ultra + SuSFS
+name: Build Android 13 GKI 5.15
+
+permissions:
+  contents: write
+  actions: write
 
 on:
   workflow_dispatch:
     inputs:
-      KERNEL_SOURCE:
-        description: 'Kernel Source Repository (misal: username/repo)'
-        required: true
-        default: 'torvalds/linux'
+
       KERNEL_BRANCH:
-        description: 'Kernel Source Branch'
+        description: "Google GKI manifest branch"
         required: true
-        default: 'master'
+        default: "common-android13-5.15"
+
       DEFCONFIG_NAME:
-        description: 'Defconfig File Name (misal: gki_defconfig atau vendor_defconfig)'
+        description: "GKI defconfig"
         required: true
-        default: 'gki_defconfig'
+        default: "gki_defconfig"
+
+      KERNEL_NAME:
+        description: "Kernel LOCALVERSION / kernel name"
+        required: true
+        default: "LunaGKI"
+
+      FEATURE_SET:
+        description: "Feature set"
+        required: true
+        type: choice
+        default: "KSU,SUSFS"
+        options:
+          - "NONE"
+          - "KSU"
+          - "SUSFS"
+          - "KSU,SUSFS"
+          - "KSU,BBG"
+          - "KSU,DROIDSPACES"
+          - "KSU,NET"
+          - "KSU,SUSFS,BBG"
+          - "KSU,SUSFS,DROIDSPACES"
+          - "KSU,SUSFS,NET"
+          - "KSU,SUSFS,BBG,DROIDSPACES"
+          - "KSU,SUSFS,BBG,NET"
+          - "KSU,SUSFS,DROIDSPACES,NET"
+          - "KSU,BBG,DROIDSPACES,NET"
+          - "FULL"
+
+      KSU_BRANCH:
+        description: "KernelSU-Next branch"
+        required: true
+        default: "next"
+
+      SUSFS_BRANCH:
+        description: "SUSFS branch/tag"
+        required: true
+        default: "gki-android13-5.15"
+
+      ENABLE_KSU:
+        description: "Enable KernelSU-Next"
+        required: true
+        type: boolean
+        default: true
+
+      ENABLE_SUSFS:
+        description: "Enable SUSFS"
+        required: true
+        type: boolean
+        default: true
+
+      ENABLE_BBG:
+        description: "Enable Baseband Guard"
+        required: true
+        type: boolean
+        default: false
+
+      ENABLE_DROIDSPACES:
+        description: "Enable DroidSpaces"
+        required: true
+        type: boolean
+        default: false
+
+      ENABLE_NETWORKING:
+        description: "Enable networking features"
+        required: true
+        type: boolean
+        default: false
+
+      ENABLE_BTF:
+        description: "Enable BTF"
+        required: true
+        type: boolean
+        default: false
+
+      ENABLE_CCACHE:
+        description: "Enable ccache"
+        required: true
+        type: boolean
+        default: true
+
+      SKIP_DISK_CLEANUP:
+        description: "Skip disk cleanup"
+        required: true
+        type: boolean
+        default: false
+
+      BUILD_JOBS:
+        description: "Build jobs, 0 = automatic"
+        required: true
+        default: "0"
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Maximize Build Space
-        uses: easimon/maximize-build-space@v10
-        with:
-          root-reserve-mb: 8192
-          temp-reserve-mb: 2048
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
 
-      - name: Checkout Kernel Source
+    name: "${{ inputs.KERNEL_NAME }} - Android 13 GKI 5.15"
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 180
+
+    steps:
+
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
+      - name: Checkout Builder
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.inputs.KERNEL_SOURCE }}
-          ref: ${{ github.event.inputs.KERNEL_BRANCH }}
-          path: kernel_workspace
+          fetch-depth: 1
 
-      - name: Install Build Dependencies
+      # ============================================================
+      # DISK CLEANUP
+      # ============================================================
+
+      - name: Free Disk Space
+        if: ${{ !inputs.SKIP_DISK_CLEANUP }}
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev build-essential zip curl git wget libcfitsio-dev
+          set -euo pipefail
 
-      - name: Setup Proton Clang Toolchain
+          echo "=========================================="
+          echo "DISK BEFORE CLEANUP"
+          echo "=========================================="
+
+          df -h
+
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/local/.ghcup \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/julia \
+            /usr/local/aws-cli \
+            /usr/local/aws-sam-cli \
+            /usr/share/swift \
+            /usr/local/share/powershell \
+            /usr/share/gradle \
+            /usr/share/miniconda \
+            /opt/hostedtoolcache/CodeQL \
+            2>/dev/null || true
+
+          sudo apt-get clean || true
+
+          sudo rm -rf \
+            /var/lib/apt/lists/* \
+            /var/cache/apt/* \
+            /tmp/* \
+            /var/tmp/* \
+            2>/dev/null || true
+
+          docker system prune -af || true
+
+          echo
+          echo "=========================================="
+          echo "DISK AFTER CLEANUP"
+          echo "=========================================="
+
+          df -h
+
+          echo
+          free -h
+
+      - name: Check Available Disk Space
+        shell: bash
         run: |
-          mkdir -p $GITHUB_WORKSPACE/toolchain
-          cd $GITHUB_WORKSPACE/toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+          set -euo pipefail
 
-      - name: Integrate SukiSU-Ultra & SuSFS
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
+          echo "=========================================="
+          echo "DISK STATUS"
+          echo "=========================================="
 
-          # 1. Setup SukiSU-Ultra (rifs28 / KSU-Next)
-          curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          df -h
+          df -ih
 
-          # 2. Clone SuSFS branch gki-android13-5.15
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15 susfs
+          echo
+          echo "Memory:"
+          free -h
 
-          # 3. Apply Patch SuSFS ke Kernel 5.15
-          cp susfs/kernel_patches/fs/susfs.c fs/
-          cp susfs/kernel_patches/include/linux/susfs.h include/linux/
-          patch -p1 < susfs/kernel_patches/5.15/5.15_ksu_susfs.patch || true
+          echo
+          echo "Skip disk cleanup: ${{ inputs.SKIP_DISK_CLEANUP }}"
 
-          # 4. Apply Patch SuSFS ke SukiSU-Ultra
-          cd drivers/kernelsu
-          patch -p1 < ../../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-          cd ../..
+          AVAILABLE_KB="$(df --output=avail "$GITHUB_WORKSPACE" | tail -1)"
 
-      - name: Configure Defconfig
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          
-          DEFCONFIG_PATH=$(find arch/arm64/configs/ -name "${{ github.event.inputs.DEFCONFIG_NAME }}" | head -n 1)
-          
-          if [ -z "$DEFCONFIG_PATH" ]; then
-            echo "Defconfig ${{ github.event.inputs.DEFCONFIG_NAME }} tidak ditemukan di arch/arm64/configs/"
+          if [ "$AVAILABLE_KB" -lt 10485760 ]; then
+            echo "ERROR: Less than 10 GiB available."
             exit 1
           fi
-          
-          echo "Injecting SuSFS + SukiSU configs into $DEFCONFIG_PATH"
-          cat <<EOF >> $DEFCONFIG_PATH
-          
-          # SukiSU-Ultra & SuSFS Configs
-          CONFIG_KSU=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSUD=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME-RELEASE=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+
+      # ============================================================
+      # GOOGLE REPO
+      # ============================================================
+
+      - name: Install Google Repo
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/bin"
+
+          curl -fL \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+
+          chmod +x "$HOME/bin/repo"
+
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+          "$HOME/bin/repo" --version
+
+      # ============================================================
+      # DEPENDENCIES
+      # ============================================================
+
+      - name: Install Dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            libdw-dev \
+            libncurses-dev \
+            build-essential \
+            zip \
+            unzip \
+            curl \
+            wget \
+            git \
+            ccache \
+            python3 \
+            python3-pip \
+            rsync \
+            dwarves \
+            lz4 \
+            zstd \
+            xz-utils \
+            device-tree-compiler \
+            gcc-aarch64-linux-gnu
+
+          sudo apt-get clean
+
+          sudo rm -rf /var/lib/apt/lists/*
+
+      # ============================================================
+      # CCACHE
+      # ============================================================
+
+      - name: Restore ccache
+        if: inputs.ENABLE_CCACHE
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: gki-android13-5.15-${{ inputs.KERNEL_BRANCH }}-proton-${{ github.run_id }}
+          restore-keys: |
+            gki-android13-5.15-${{ inputs.KERNEL_BRANCH }}-proton-
+            gki-android13-5.15-
+
+      - name: Configure ccache
+        if: inputs.ENABLE_CCACHE
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$HOME/.ccache"
+
+          ccache --set-config=cache_dir="$HOME/.ccache"
+          ccache --set-config=max_size=10G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=5
+
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+
+          ccache -z
+
+          ccache -p
+
+      # ============================================================
+      # GOOGLE GKI
+      # ============================================================
+
+      - name: Initialize Google GKI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf "$GITHUB_WORKSPACE/gki"
+
+          mkdir -p "$GITHUB_WORKSPACE/gki"
+
+          cd "$GITHUB_WORKSPACE/gki"
+
+          repo init \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "${{ inputs.KERNEL_BRANCH }}" \
+            --depth=1 \
+            --no-clone-bundle \
+            --no-tags
+
+      - name: Sync Google GKI
+        working-directory: gki
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          repo sync \
+            -c \
+            -j"$(nproc)" \
+            --no-tags \
+            --optimized-fetch \
+            --prune
+
+          repo status
+
+      # ============================================================
+      # VERIFY GKI
+      # ============================================================
+
+      - name: Verify GKI
+        working-directory: gki/common
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -d arch/arm64
+          test -d arch/arm64/configs
+          test -f "arch/arm64/configs/${{ inputs.DEFCONFIG_NAME }}"
+
+          echo "GKI source verified."
+
+          echo "GKI_ROOT=$GITHUB_WORKSPACE/gki" >> "$GITHUB_ENV"
+          echo "KERNEL_ROOT=$GITHUB_WORKSPACE/gki/common" >> "$GITHUB_ENV"
+          echo "OUT_DIR=$GITHUB_WORKSPACE/out" >> "$GITHUB_ENV"
+
+      # ============================================================
+      # PROTON GCC
+      # ============================================================
+
+      - name: Setup Proton GCC
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$GITHUB_WORKSPACE"
+
+          rm -rf proton-clang
+
+          git clone \
+            --depth=1 \
+            https://github.com/kdrag0n/proton-clang.git \
+            proton-clang
+
+          test -x proton-clang/bin/clang
+
+          echo "PROTON_CLANG=$GITHUB_WORKSPACE/proton-clang" >> "$GITHUB_ENV"
+
+          export PATH="$GITHUB_WORKSPACE/proton-clang/bin:$PATH"
+
+          clang --version
+
+      # ============================================================
+      # KERNELSU-NEXT
+      # ============================================================
+
+      - name: Setup KernelSU-Next
+        if: inputs.ENABLE_KSU || contains(inputs.FEATURE_SET, 'KSU') || inputs.FEATURE_SET == 'FULL'
+        working-directory: gki/common
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "SETTING UP KERNELSU-NEXT"
+          echo "=========================================="
+
+          curl -fLSs \
+            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${{ inputs.KSU_BRANCH }}/kernel/setup.sh" \
+            | bash -s "${{ inputs.KSU_BRANCH }}"
+
+          test -d drivers/kernelsu
+
+          echo "KernelSU-Next installed."
+
+      # ============================================================
+      # SUSFS
+      # ============================================================
+
+      - name: Setup SUSFS
+        if: inputs.ENABLE_SUSFS || contains(inputs.FEATURE_SET, 'SUSFS') || inputs.FEATURE_SET == 'FULL'
+        working-directory: gki
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "SETTING UP SUSFS"
+          echo "=========================================="
+
+          rm -rf susfs
+
+          git clone \
+            --depth=1 \
+            --branch "${{ inputs.SUSFS_BRANCH }}" \
+            https://gitlab.com/simonpunk/susfs4ksu.git \
+            susfs
+
+          PATCH="susfs/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch"
+
+          if [ ! -f "$PATCH" ]; then
+            echo "ERROR: SUSFS patch not found:"
+            echo "$PATCH"
+
+            find susfs/kernel_patches \
+              -type f \
+              | sort
+
+            exit 1
+          fi
+
+          cp \
+            susfs/kernel_patches/fs/* \
+            common/fs/
+
+          cp \
+            susfs/kernel_patches/include/linux/* \
+            common/include/linux/
+
+          cd common
+
+          patch \
+            --forward \
+            --batch \
+            -p1 \
+            < "../$PATCH" \
+            || echo "WARNING: SUSFS patch reported rejected hunks."
+
+          REJECTS="$(find . -name '*.rej' | sort)"
+          EXPECTED="./fs/namespace.c.rej ./fs/proc/task_mmu.c.rej"
+
+          for REJECT in $REJECTS; do
+
+            KEEP=0
+
+            for EXP in $EXPECTED; do
+              if [ "$REJECT" = "$EXP" ]; then
+                KEEP=1
+              fi
+            done
+
+            if [ "$KEEP" != "1" ]; then
+              echo "ERROR: unexpected SUSFS patch reject: $REJECT"
+              exit 1
+            fi
+
+          done
+
+          python3 - <<'PYEOF'
+          from pathlib import Path
+
+          ns = Path("fs/namespace.c")
+          s = ns.read_text()
+
+          assert "#include <linux/susfs_def.h>" not in s, "namespace.c susfs include already present"
+
+          anchor = "#include <linux/mnt_idmapping.h>\n"
+          block = (
+              "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+              "#include <linux/susfs_def.h>\n"
+              "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+          )
+          assert s.count(anchor) == 1, "namespace.c mnt_idmapping anchor not unique"
+          s = s.replace(anchor, anchor + block)
+
+          anchor = "#include <trace/hooks/blk.h>\n"
+          block = (
+              "\n"
+              "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+              "extern bool susfs_is_current_ksu_domain(void);\n"
+              "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n"
+              "\n"
+              "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n"
+              "\n"
+              "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+          )
+          assert s.count(anchor) == 1, "namespace.c blk.h anchor not unique"
+          s = s.replace(anchor, anchor + block)
+          ns.write_text(s)
+
+          tm = Path("fs/proc/task_mmu.c")
+          s = tm.read_text()
+
+          assert "susfs_def.h" not in s.split("\n\n#include <asm/elf.h>")[0], "task_mmu.c susfs include already present"
+
+          anchor = "#include <linux/pkeys.h>\n"
+          block = (
+              "#if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n"
+              "#include <linux/susfs_def.h>\n"
+              "#endif // #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n"
+          )
+          assert s.count(anchor) == 1, "task_mmu.c pkeys.h anchor not unique"
+          s = s.replace(anchor, anchor + block)
+          tm.write_text(s)
+
+          print("Applied upstream-shifted SUSFS hunks.")
+          PYEOF
+
+          rm -f fs/namespace.c.rej fs/proc/task_mmu.c.rej
+
+          grep -q "susfs_is_current_ksu_domain" fs/namespace.c
+          grep -q "CL_COPY_MNT_NS" fs/namespace.c
+          grep -q "VFSMOUNT_MNT_FLAGS_KSU_UNSHARED_MNT" fs/namespace.c
+          grep -q "susfs_def.h" fs/namespace.c
+          grep -q "susfs_def.h" fs/proc/task_mmu.c
+          grep -q "susfs_sus_kstat_spoof_show_map_vma" fs/proc/task_mmu.c
+          grep -qs "susfs" fs/exec.c
+          grep -qs "susfs" fs/namei.c
+
+          echo "SUSFS patch verified."
+
+          KSU_PATCH="../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+
+          if [ -f "$KSU_PATCH" ] && [ -d drivers/kernelsu ]; then
+
+            patch \
+              --forward \
+              --batch \
+              -p1 \
+              < "$KSU_PATCH" \
+              || echo "WARNING: KernelSU SUSFS patch already applied or partially incompatible."
+
+          fi
+
+      # ============================================================
+      # BASEBAND GUARD
+      # ============================================================
+
+      - name: Setup Baseband Guard
+        if: inputs.ENABLE_BBG || contains(inputs.FEATURE_SET, 'BBG') || inputs.FEATURE_SET == 'FULL'
+        working-directory: gki
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "SETTING UP BASEBAND GUARD"
+          echo "=========================================="
+
+          rm -rf Baseband-guard
+
+          git clone \
+            --depth=1 \
+            https://github.com/vc-teahouse/Baseband-guard.git \
+            Baseband-guard
+
+          echo "Baseband Guard repository cloned."
+
+          find \
+            Baseband-guard \
+            -maxdepth 3 \
+            -type f \
+            ! -path '*/.git/*' \
+            | sort \
+            | head -200
+
+          test -f Baseband-guard/setup.sh
+
+          bash Baseband-guard/setup.sh
+
+          grep -q "baseband-guard" common/security/Makefile
+
+          grep -q "security/baseband-guard/Kconfig" common/security/Kconfig
+
+          test -L common/security/baseband-guard
+
+          echo "Baseband Guard integration verified."
+
+      # ============================================================
+      # DROIDSPACES
+      # ============================================================
+
+      - name: Setup DroidSpaces
+        if: inputs.ENABLE_DROIDSPACES || contains(inputs.FEATURE_SET, 'DROIDSPACES') || inputs.FEATURE_SET == 'FULL'
+        working-directory: gki
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "SETTING UP DROIDSPACES"
+          echo "=========================================="
+
+          rm -rf Droidspaces-OSS
+
+          git clone \
+            --depth=1 \
+            https://github.com/ravindu644/Droidspaces-OSS.git \
+            Droidspaces-OSS
+
+          DS_PATCH="Droidspaces-OSS/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch"
+
+          if [ ! -f "$DS_PATCH" ]; then
+
+            echo "ERROR: Required DroidSpaces GKI below-6.12 patch not found."
+
+            find \
+              Droidspaces-OSS/Documentation/resources/kernel-patches/GKI \
+              -type f \
+              | sort
+
+            exit 1
+
+          fi
+
+          echo "Using DroidSpaces patch:"
+          echo "$DS_PATCH"
+
+          echo
+          echo "Dry-run patch test..."
+
+          if ! patch \
+            -d common \
+            --dry-run \
+            -p1 \
+            < "$DS_PATCH"
+          then
+
+            echo "ERROR: DroidSpaces below-6.12 patch does not apply cleanly."
+            echo "Refusing to use a 6.12+ patch on the 5.15 kernel."
+
+            exit 1
+
+          fi
+
+          echo
+          echo "Applying patch..."
+
+          patch \
+            -d common \
+            --forward \
+            --batch \
+            -p1 \
+            < "$DS_PATCH"
+
+          echo "DroidSpaces patch applied."
+
+          rm -rf wild-patches
+
+          git clone \
+            --depth=1 \
+            https://github.com/WildKernels/kernel_patches.git \
+            wild-patches
+
+          for WK_PATCH in \
+            "wild-patches/common/droidspaces/0001-Guard-USER_NS-for-non-root-users.patch"
+          do
+
+            echo
+            echo "Applying WildKernels KABI patch: $WK_PATCH"
+
+            patch \
+              -d common \
+              --forward \
+              --batch \
+              -p1 \
+              < "$WK_PATCH"
+
+          done
+
+          echo "WildKernels DroidSpaces KABI patches applied."
+
+      # ============================================================
+      # DROIDSPACES CONFIG
+      # ============================================================
+
+      - name: Create DroidSpaces Config
+        if: inputs.ENABLE_DROIDSPACES || contains(inputs.FEATURE_SET, 'DROIDSPACES') || inputs.FEATURE_SET == 'FULL'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > "$GITHUB_WORKSPACE/droidspaces.config" <<'EOF'
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_USER_NS=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
           EOF
 
-      - name: Build Kernel
+      # ============================================================
+      # NETWORKING
+      # ============================================================
+
+      - name: Create Networking Config
+        if: inputs.ENABLE_NETWORKING || contains(inputs.FEATURE_SET, 'NET') || inputs.FEATURE_SET == 'FULL'
+        shell: bash
         run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
-          
-          make O=out ARCH=arm64 ${{ github.event.inputs.DEFCONFIG_NAME }}
-          make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang \
+          set -euo pipefail
+
+          cat > "$GITHUB_WORKSPACE/networking.config" <<'EOF'
+          CONFIG_NET=y
+          CONFIG_INET=y
+          CONFIG_IPV6=y
+          CONFIG_NETFILTER=y
+          CONFIG_NETFILTER_XTABLES=y
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_BBR=y
+          EOF
+
+      # ============================================================
+      # CONFIGURE KERNEL
+      # ============================================================
+
+      - name: Configure GKI
+        working-directory: gki/common
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$GITHUB_WORKSPACE/out"
+
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          make \
+            O="$OUT" \
+            ARCH=arm64 \
+            "${{ inputs.DEFCONFIG_NAME }}"
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --set-str CONFIG_LOCALVERSION \
+            "-${{ inputs.KERNEL_NAME }}"
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --disable CONFIG_WERROR
+
+          if [ "${{ inputs.ENABLE_KSU }}" = "true" ] || \
+             [[ "${{ inputs.FEATURE_SET }}" == *"KSU"* ]] || \
+             [ "${{ inputs.FEATURE_SET }}" = "FULL" ]; then
+
+            if grep -Rqs '^config KSU$' drivers/kernelsu 2>/dev/null; then
+              scripts/config \
+                --file "$OUT/.config" \
+                --enable CONFIG_KSU
+            fi
+
+          fi
+
+          if [ "${{ inputs.ENABLE_SUSFS }}" = "true" ] || \
+             [[ "${{ inputs.FEATURE_SET }}" == *"SUSFS"* ]] || \
+             [ "${{ inputs.FEATURE_SET }}" = "FULL" ]; then
+
+            for CONFIG in \
+              CONFIG_KSU_SUSFS \
+              CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT \
+              CONFIG_KSU_SUSFS_SUS_PATH \
+              CONFIG_KSU_SUSFS_SUS_MOUNT \
+              CONFIG_KSU_SUSFS_SUS_KSTAT \
+              CONFIG_KSU_SUSFS_SUS_OVERLAYFS \
+              CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSUD \
+              CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT \
+              CONFIG_KSU_SUSFS_TRY_UMOUNT \
+              CONFIG_KSU_SUSFS_SPOOF_UNAME_RELEASE \
+              CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+            do
+
+              NAME="${CONFIG#CONFIG_}"
+
+              if grep -Rqs \
+                "config ${NAME}" \
+                . \
+                --include='Kconfig' \
+                --include='Kconfig.*' \
+                2>/dev/null
+              then
+                scripts/config \
+                  --file "$OUT/.config" \
+                  --enable "$CONFIG"
+              fi
+
+            done
+
+          fi
+
+          for CONFIG_FILE in \
+            "$GITHUB_WORKSPACE/droidspaces.config" \
+            "$GITHUB_WORKSPACE/networking.config"
+          do
+
+            if [ -f "$CONFIG_FILE" ]; then
+
+              while IFS='=' read -r KEY VALUE; do
+
+                [ -z "$KEY" ] && continue
+
+                case "$VALUE" in
+
+                  y)
+                    scripts/config \
+                      --file "$OUT/.config" \
+                      --enable "$KEY"
+                    ;;
+
+                  m)
+                    scripts/config \
+                      --file "$OUT/.config" \
+                      --module "$KEY"
+                    ;;
+
+                esac
+
+              done < "$CONFIG_FILE"
+
+            fi
+
+          done
+
+          if [ "${{ inputs.ENABLE_BBG }}" = "true" ] || \
+             [[ "${{ inputs.FEATURE_SET }}" == *"BBG"* ]] || \
+             [ "${{ inputs.FEATURE_SET }}" = "FULL" ]; then
+
+            scripts/config \
+              --file "$OUT/.config" \
+              --enable CONFIG_SECURITY
+
+            scripts/config \
+              --file "$OUT/.config" \
+              --enable CONFIG_BBG
+
+            CURRENT_LSM="$(grep -oP '(?<=^CONFIG_LSM=")[^"]+' "$OUT/.config" || true)"
+
+            if [ -n "$CURRENT_LSM" ] && [[ "$CURRENT_LSM" != *baseband_guard* ]]; then
+
+              scripts/config \
+                --file "$OUT/.config" \
+                --set-str CONFIG_LSM "${CURRENT_LSM},baseband_guard"
+
+            elif [ -z "$CURRENT_LSM" ]; then
+
+              scripts/config \
+                --file "$OUT/.config" \
+                --set-str CONFIG_LSM "baseband_guard"
+
+            fi
+
+          fi
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --disable CONFIG_LTO_NONE
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --enable CONFIG_LTO
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --enable CONFIG_LTO_CLANG_THIN
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --enable CONFIG_CFI_CLANG
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --enable CONFIG_CFI_CLANG_SHADOW
+
+          scripts/config \
+            --file "$OUT/.config" \
+            --enable CONFIG_SHADOW_CALL_STACK
+
+          for KMI_CFG in \
+            CONFIG_SYSVIPC \
+            CONFIG_POSIX_MQUEUE \
+            CONFIG_IPC_NS \
+            CONFIG_PID_NS \
+            CONFIG_USER_NS \
+            CONFIG_DEVTMPFS \
+            CONFIG_TMPFS_XATTR \
+            CONFIG_TMPFS_POSIX_ACL
+          do
+
+            if grep -q "^${KMI_CFG}=y" "$OUT/.config"; then
+              echo "WARNING: ${KMI_CFG}=y diverges from stock GKI KMI."
+              echo "Vendor modules may fail version checks and the kernel may not boot."
+            fi
+
+          done
+
+          if [ "${{ inputs.ENABLE_BTF }}" = "true" ]; then
+
+            scripts/config \
+              --file "$OUT/.config" \
+              --enable CONFIG_DEBUG_INFO
+
+            scripts/config \
+              --file "$OUT/.config" \
+              --enable CONFIG_DEBUG_INFO_BTF
+
+          fi
+
+          make \
+            O="$OUT" \
+            ARCH=arm64 \
+            olddefconfig
+
+          test -f "$OUT/.config"
+
+          echo
+          echo "=========================================="
+          echo "FINAL CONFIG"
+          echo "=========================================="
+
+          grep -E \
+            'CONFIG_LOCALVERSION=|CONFIG_KSU=|CONFIG_KSU_SUSFS|CONFIG_BBG=|CONFIG_LSM=|CONFIG_LTO|CONFIG_CFI_CLANG=|CONFIG_SHADOW_CALL_STACK=|CONFIG_SYSVIPC=|CONFIG_POSIX_MQUEUE=|CONFIG_IPC_NS=|CONFIG_PID_NS=|CONFIG_USER_NS=|CONFIG_DEBUG_INFO_BTF=' \
+            "$OUT/.config" \
+            || true
+
+      # ============================================================
+      # BUILD
+      # ============================================================
+
+      - name: Build GKI Kernel
+        working-directory: gki/common
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=========================================="
+          echo "BUILDING GKI 5.15"
+          echo "=========================================="
+
+          if [ "${{ inputs.BUILD_JOBS }}" = "0" ]; then
+            JOBS="$(nproc)"
+          else
+            JOBS="${{ inputs.BUILD_JOBS }}"
+          fi
+
+          export PATH="$PROTON_CLANG/bin:$PATH"
+
+          if [ "${{ inputs.ENABLE_CCACHE }}" = "true" ]; then
+            export CC="ccache clang"
+          else
+            export CC="clang"
+          fi
+
+          echo "Compiler:"
+          command -v clang
+          clang --version
+
+          echo
+          echo "Jobs: $JOBS"
+
+          make \
+            O="$GITHUB_WORKSPACE/out" \
+            ARCH=arm64 \
             LLVM=1 \
             LLVM_IAS=1 \
+            CC="$CC" \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            HOSTLDFLAGS="-B/usr/bin/" \
+            KCFLAGS="-Wno-error" \
+            -j"$JOBS" \
+            Image \
+            Image.gz \
+            dtbs
 
-      - name: Pack Kernel Output
+      # ============================================================
+      # CCACHE STATS
+      # ============================================================
+
+      - name: ccache Statistics
+        if: always()
+        shell: bash
         run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          mkdir -p output
-          if [ -f out/arch/arm64/boot/Image.gz ]; then
-            cp out/arch/arm64/boot/Image.gz output/
-          fi
-          if [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image output/
-          fi
-          cd output
-          zip -r kernel-5.15-sukisu-susfs.zip ./*
+          ccache -s || true
 
-      - name: Upload Kernel Artifact
+      # ============================================================
+      # VERIFY OUTPUT
+      # ============================================================
+
+      - name: Verify Kernel Output
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -s "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
+          test -s "$GITHUB_WORKSPACE/out/.config"
+
+          echo "Kernel:"
+          ls -lh "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image"
+
+          if [ -f "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz" ]; then
+            ls -lh "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz"
+          fi
+
+          echo
+          echo "Linux version:"
+
+          strings \
+            "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image" \
+            | grep -m1 '^Linux version ' \
+            || true
+
+      # ============================================================
+      # PACKAGE
+      # ============================================================
+
+      - name: Package Kernel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf "$GITHUB_WORKSPACE/output"
+          mkdir -p "$GITHUB_WORKSPACE/output"
+
+          cp \
+            "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image" \
+            "$GITHUB_WORKSPACE/output/Image"
+
+          if [ -f "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz" ]; then
+            cp \
+              "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz" \
+              "$GITHUB_WORKSPACE/output/Image.gz"
+          fi
+
+          cp \
+            "$GITHUB_WORKSPACE/out/.config" \
+            "$GITHUB_WORKSPACE/output/kernel-config"
+
+          cat > "$GITHUB_WORKSPACE/output/build-info.txt" <<EOF
+          ==========================================
+          GKI KERNEL BUILD
+          ==========================================
+
+          Kernel Name: ${{ inputs.KERNEL_NAME }}
+          Android: 13
+          Kernel: 5.15
+          Manifest: ${{ inputs.KERNEL_BRANCH }}
+          Defconfig: ${{ inputs.DEFCONFIG_NAME }}
+          Feature Set: ${{ inputs.FEATURE_SET }}
+
+          KernelSU: ${{ inputs.ENABLE_KSU }}
+          SUSFS: ${{ inputs.ENABLE_SUSFS }}
+          Baseband Guard: ${{ inputs.ENABLE_BBG }}
+          DroidSpaces: ${{ inputs.ENABLE_DROIDSPACES }}
+          Networking: ${{ inputs.ENABLE_NETWORKING }}
+          BTF: ${{ inputs.ENABLE_BTF }}
+          ccache: ${{ inputs.ENABLE_CCACHE }}
+          Skip Disk Cleanup: ${{ inputs.SKIP_DISK_CLEANUP }}
+
+          Build Date:
+          $(date -u)
+          EOF
+
+          cd "$GITHUB_WORKSPACE/output"
+
+          zip \
+            -9 \
+            -r \
+            "../${{ inputs.KERNEL_NAME }}-GKI-5.15.zip" \
+            .
+
+      # ============================================================
+      # ANYKERNEL3
+      # ============================================================
+
+      - name: Package AnyKernel3
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf "$GITHUB_WORKSPACE/anykernel"
+
+          git clone \
+            --depth=1 \
+            https://github.com/osm0sis/AnyKernel3.git \
+            "$GITHUB_WORKSPACE/anykernel"
+
+          rm -rf "$GITHUB_WORKSPACE/anykernel/.git"
+
+          rm -f \
+            "$GITHUB_WORKSPACE/anykernel/README.md" \
+            "$GITHUB_WORKSPACE/anykernel/anykernel.sh" \
+            "$GITHUB_WORKSPACE/anykernel/.gitignore"
+
+          cat > "$GITHUB_WORKSPACE/anykernel/anykernel.sh" <<'AK3EOF'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          ### AnyKernel setup
+          # global properties
+          properties() {
+            kernel.string={KERNEL_STRING}
+            do.devicecheck=1
+            do.modules=0
+            do.systemless=1
+            do.cleanup=1
+            do.cleanuponabort=0
+            device.name1=serenity
+            supported.versions=
+            supported.patchlevels=
+            supported.vendorpatchlevels=
+          } # end properties
+
+          ### AnyKernel install
+          ## boot files attributes
+          boot_attributes() {
+            set_perm_recursive 0 0 755 644 $RAMDISK/*;
+            set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          } # end attributes
+
+          # boot shell variables
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+          . tools/ak3-core.sh;
+
+          # boot install
+          split_boot; # use split_boot to skip ramdisk unpack, e.g. for devices with init_boot ramdisk
+
+          flash_boot; # use flash_boot to skip ramdisk repack, e.g. for devices with init_boot ramdisk
+          ## end boot install
+          AK3EOF
+
+          sed -i \
+            "s|{KERNEL_STRING}|${{ inputs.KERNEL_NAME }}|g" \
+            "$GITHUB_WORKSPACE/anykernel/anykernel.sh"
+
+          if grep -q "{KERNEL_STRING}" "$GITHUB_WORKSPACE/anykernel/anykernel.sh"; then
+            echo "ERROR: kernel.string placeholder was not replaced."
+            exit 1
+          fi
+
+          cp \
+            "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image" \
+            "$GITHUB_WORKSPACE/anykernel/Image"
+
+          if [ -f "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz" ]; then
+
+            cp \
+              "$GITHUB_WORKSPACE/out/arch/arm64/boot/Image.gz" \
+              "$GITHUB_WORKSPACE/anykernel/Image.gz"
+
+          fi
+
+          cd "$GITHUB_WORKSPACE/anykernel"
+
+          zip \
+            -9 \
+            -r \
+            "../${{ inputs.KERNEL_NAME }}-AnyKernel3.zip" \
+            .
+
+      # ============================================================
+      # UPLOAD ARTIFACTS
+      # ============================================================
+
+      - name: Upload Kernel Package
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-5.15-SukiSU-SuSFS
-          path: kernel_workspace/output/kernel-5.15-sukisu-susfs.zip
+          name: ${{ inputs.KERNEL_NAME }}-GKI-5.15
+          path: |
+            ${{ inputs.KERNEL_NAME }}-GKI-5.15.zip
+            output/build-info.txt
+          if-no-files-found: error
+          compression-level: 9
+
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.KERNEL_NAME }}-Image
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
+          if-no-files-found: warn
+          compression-level: 9
+
+      - name: Upload Kernel Config
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.KERNEL_NAME }}-Config
+          path: out/.config
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 9
+
+      - name: Upload AnyKernel3 Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.KERNEL_NAME }}-AnyKernel3
+          path: ${{ inputs.KERNEL_NAME }}-AnyKernel3.zip
+          if-no-files-found: error
+          compression-level: 9
+
+      # ============================================================
+      # SUMMARY
+      # ============================================================
+
+      - name: Build Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Android 13 GKI 5.15 Build"
+            echo
+            echo "| Setting | Value |"
+            echo "|---|---|"
+            echo "| Kernel | ${{ inputs.KERNEL_NAME }} |"
+            echo "| Manifest | ${{ inputs.KERNEL_BRANCH }} |"
+            echo "| Defconfig | ${{ inputs.DEFCONFIG_NAME }} |"
+            echo "| Features | ${{ inputs.FEATURE_SET }} |"
+            echo "| KernelSU | ${{ inputs.ENABLE_KSU }} |"
+            echo "| SUSFS | ${{ inputs.ENABLE_SUSFS }} |"
+            echo "| Baseband Guard | ${{ inputs.ENABLE_BBG }} |"
+            echo "| DroidSpaces | ${{ inputs.ENABLE_DROIDSPACES }} |"
+            echo "| Networking | ${{ inputs.ENABLE_NETWORKING }} |"
+            echo "| BTF | ${{ inputs.ENABLE_BTF }} |"
+            echo "| ccache | ${{ inputs.ENABLE_CCACHE }} |"
+            echo "| Skip disk cleanup | ${{ inputs.SKIP_DISK_CLEANUP }} |"
+            echo "| AnyKernel3 | yes (device: serenity) |"
+          } >> "$GITHUB_STEP_SUMMARY"
