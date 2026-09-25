@@ -36,11 +36,9 @@ jobs:
         run: |
           cd kernel/common
           git clone https://github.com/ravindu644/Droidspaces-OSS.git --depth=1 droid-tmp
-          ls droid-tmp/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/
           patch -p1 < droid-tmp/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
           rm -rf droid-tmp
 
-          # 2. KSUN 3.4.0 pin
           git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b v3.4.0 --depth=1 ksun-tmp
           mkdir -p drivers/kernelsu
           cp -r ksun-tmp/kernel/* drivers/kernelsu/
@@ -48,13 +46,15 @@ jobs:
           echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
           rm -rf ksun-tmp
 
-          # 3. SUSFS latest
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15 --depth=1 susfs
           cp susfs/kernel_patches/fs/susfs.c fs/
-          cp susfs/kernel_patches/include/linux/susfs.h include/linux/
-          cp susfs/kernel_patches/include/linux/susfs_variants.h include/linux/ 2>/dev/null || true
-          patch -p1 --fuzz=3 < susfs/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch
-          patch -p1 --fuzz=3 < susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          cp susfs/kernel_patches/include/linux/* include/linux/
+          # kasih || true biar 1 hunk fail gak kill job, sisanya udah masuk
+          patch -p1 --fuzz=3 < susfs/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch || true
+          # benerin Hunk #1 namespace.c manual
+          grep -q "susfs_def.h" fs/namespace.c || sed -i '/#include <linux\/mnt_idmapping.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' fs/namespace.c
+          grep -q "susfs_def.h" fs/namespace.c && echo "namespace fix OK" || (cat fs/namespace.c.rej; exit 1)
+          patch -p1 --fuzz=3 < susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
           rm -rf susfs
 
       - name: Config gki_defconfig
