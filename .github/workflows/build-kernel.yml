@@ -57,37 +57,42 @@ jobs:
           patch -p1 --fuzz=3 < susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
           rm -rf susfs
 
-      - name: Config gki_defconfig
+      - name: Config via POST_DEFCONFIG (biar lolos check_defconfig)
         run: |
           cd kernel/common
-          DEF=arch/arm64/configs/gki_defconfig
-          set_conf() {
-            if grep -q "# $1 is not set" $DEF; then sed -i "s/# $1 is not set/$1=y/" $DEF
-            elif ! grep -q "^$1=" $DEF; then echo "$1=y" >> $DEF; fi
-          }
-          set_conf CONFIG_KSU
-          set_conf CONFIG_KSU_SUSFS
-          set_conf CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
-          set_conf CONFIG_KSU_SUSFS_SUS_PATH
-          set_conf CONFIG_KSU_SUSFS_SUS_MOUNT
-          set_conf CONFIG_KSU_SUSFS_SUS_KSTAT
-          set_conf CONFIG_KSU_SUSFS_TRY_UMOUNT
-          set_conf CONFIG_KSU_SUSFS_SPOOF_UNAME
-          set_conf CONFIG_SYSVIPC
-          set_conf CONFIG_POSIX_MQUEUE
-          set_conf CONFIG_IPC_NS
-          set_conf CONFIG_PID_NS
-          set_conf CONFIG_DEVTMPFS
-          set_conf CONFIG_USER_NS
-          set_conf CONFIG_TMPFS_XATTR
-          set_conf CONFIG_TMPFS_POSIX_ACL
-          set_conf CONFIG_NETFILTER_XT_MATCH_ADDRTYPE
-          set_conf CONFIG_IP_SET
-          sed -i '/CONFIG_LOCALVERSION/d' $DEF
-          echo 'CONFIG_LOCALVERSION="-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive"' >> $DEF
+          # 1. balikin gki_defconfig ke vanilla, JANGAN diedit langsung
+          git checkout -- arch/arm64/configs/gki_defconfig
+          # localversion tetep boleh
           echo "-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive" > localversion
-          cat localversion
 
+          # 2. suntik via build.config.gki.aarch64
+          cat >> ../build.config.gki.aarch64 <<'EOF'
+          POST_DEFCONFIG_CMDS="update_extra_config"
+          update_extra_config() {
+            echo "CONFIG_KSU=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_KSU_SUSFS=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_SYSVIPC=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_POSIX_MQUEUE=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_IPC_NS=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_PID_NS=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_DEVTMPFS=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_USER_NS=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_TMPFS_XATTR=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_TMPFS_POSIX_ACL=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> ${OUT_DIR}/.config
+            echo "CONFIG_IP_SET=y" >> ${OUT_DIR}/.config
+            echo 'CONFIG_LOCALVERSION="-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive"' >> ${OUT_DIR}/.config
+            (cd ${OUT_DIR} && make O=${OUT_DIR} olddefconfig)
+          }
+          EOF
+          cat ../build.config.gki.aarch64 | tail -n 30
+          
       - name: Build GKI
         run: |
           cd kernel
