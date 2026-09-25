@@ -1,24 +1,13 @@
-name: Build Kernel 5.15 SukiSU-Ultra + SuSFS
-
+name: Build TendouKei-v27.1.2
 on:
   workflow_dispatch:
-    inputs:
-      KERNEL_SOURCE:
-        description: 'Kernel Source Repository (misal: username/repo)'
-        required: true
-        default: 'torvalds/linux'
-      KERNEL_BRANCH:
-        description: 'Kernel Source Branch'
-        required: true
-        default: 'master'
-      DEFCONFIG_NAME:
-        description: 'Defconfig File Name (misal: gki_defconfig atau vendor_defconfig)'
-        required: true
-        default: 'gki_defconfig'
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@v10
@@ -29,101 +18,110 @@ jobs:
           remove-android: 'true'
           remove-haskell: 'true'
 
-      - name: Checkout Kernel Source
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.KERNEL_SOURCE }}
-          ref: ${{ github.event.inputs.KERNEL_BRANCH }}
-          path: kernel_workspace
-
-      - name: Install Build Dependencies
+      - name: Install deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison flex libssl-dev libelf-dev build-essential zip curl git wget libcfitsio-dev
+          sudo apt update
+          sudo apt install -y git repo python3 curl zip unzip bc bison flex libssl-dev libelf-dev build-essential
+          git config --global user.name "farrizdesignpro1339"
+          git config --global user.email "farrizdesignpro1339@users.noreply.github.com"
 
-      - name: Setup Proton Clang Toolchain
+      - name: Sync vanilla android13-5.15
         run: |
-          mkdir -p $GITHUB_WORKSPACE/toolchain
-          cd $GITHUB_WORKSPACE/toolchain
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
+          mkdir kernel && cd kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android13-5.15 --depth=1
+          repo sync -c -j$(nproc --all) --no-tags --no-clone-bundle
+          ls common/build.config.gki.aarch64
 
-      - name: Integrate SukiSU-Ultra & SuSFS
+      - name: Inject Droid + KSUN 3.4.0 + SUSFS
         run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
+          cd kernel/common
+          # 1. Droidspaces kABI wajib pertama
+          git clone https://github.com/ravindu644/Droidspaces-OSS.git --depth=1 droid-tmp
+          patch -p1 < droid-tmp/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kABI_6_7_8.patch
+          rm -rf droid-tmp
 
-          # 1. Setup SukiSU-Ultra (rifs28 / KSU-Next)
-          curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          # 2. KSUN 3.4.0 pin
+          git clone https://github.com/KernelSU-Next/KernelSU-Next.git -b v3.4.0 --depth=1 ksun-tmp
+          mkdir -p drivers/kernelsu
+          cp -r ksun-tmp/kernel/* drivers/kernelsu/
+          echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          rm -rf ksun-tmp
 
-          # 2. Clone SuSFS branch gki-android13-5.15
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15 susfs
-
-          # 3. Apply Patch SuSFS ke Kernel 5.15
+          # 3. SUSFS latest
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15 --depth=1 susfs
           cp susfs/kernel_patches/fs/susfs.c fs/
           cp susfs/kernel_patches/include/linux/susfs.h include/linux/
-          patch -p1 < susfs/kernel_patches/5.15/5.15_ksu_susfs.patch || true
+          cp susfs/kernel_patches/include/linux/susfs_variants.h include/linux/ 2>/dev/null || true
+          patch -p1 --fuzz=3 < susfs/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch
+          patch -p1 --fuzz=3 < susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          rm -rf susfs
 
-          # 4. Apply Patch SuSFS ke SukiSU-Ultra
-          cd drivers/kernelsu
-          patch -p1 < ../../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
-          cd ../..
-
-      - name: Configure Defconfig
+      - name: Config gki_defconfig
         run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          
-          DEFCONFIG_PATH=$(find arch/arm64/configs/ -name "${{ github.event.inputs.DEFCONFIG_NAME }}" | head -n 1)
-          
-          if [ -z "$DEFCONFIG_PATH" ]; then
-            echo "Defconfig ${{ github.event.inputs.DEFCONFIG_NAME }} tidak ditemukan di arch/arm64/configs/"
-            exit 1
-          fi
-          
-          echo "Injecting SuSFS + SukiSU configs into $DEFCONFIG_PATH"
-          cat <<EOF >> $DEFCONFIG_PATH
-          
-          # SukiSU-Ultra & SuSFS Configs
-          CONFIG_KSU=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSUD=y
-          CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME-RELEASE=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          EOF
+          cd kernel/common
+          DEF=arch/arm64/configs/gki_defconfig
+          set_conf() {
+            if grep -q "# $1 is not set" $DEF; then sed -i "s/# $1 is not set/$1=y/" $DEF
+            elif ! grep -q "^$1=" $DEF; then echo "$1=y" >> $DEF; fi
+          }
+          set_conf CONFIG_KSU
+          set_conf CONFIG_KSU_SUSFS
+          set_conf CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT
+          set_conf CONFIG_KSU_SUSFS_SUS_PATH
+          set_conf CONFIG_KSU_SUSFS_SUS_MOUNT
+          set_conf CONFIG_KSU_SUSFS_SUS_KSTAT
+          set_conf CONFIG_KSU_SUSFS_TRY_UMOUNT
+          set_conf CONFIG_KSU_SUSFS_SPOOF_UNAME
+          set_conf CONFIG_SYSVIPC
+          set_conf CONFIG_POSIX_MQUEUE
+          set_conf CONFIG_IPC_NS
+          set_conf CONFIG_PID_NS
+          set_conf CONFIG_DEVTMPFS
+          set_conf CONFIG_USER_NS
+          set_conf CONFIG_TMPFS_XATTR
+          set_conf CONFIG_TMPFS_POSIX_ACL
+          set_conf CONFIG_NETFILTER_XT_MATCH_ADDRTYPE
+          set_conf CONFIG_IP_SET
+          sed -i '/CONFIG_LOCALVERSION/d' $DEF
+          echo 'CONFIG_LOCALVERSION="-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive"' >> $DEF
+          echo "-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive" > localversion
+          cat localversion
 
-      - name: Build Kernel
+      - name: Build GKI
         run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          export PATH="$GITHUB_WORKSPACE/toolchain/clang/bin:$PATH"
-          
-          make O=out ARCH=arm64 ${{ github.event.inputs.DEFCONFIG_NAME }}
-          make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          cd kernel
+          BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh -j$(nproc --all)
+          ls -lh out/android13-5.15/dist/
 
-      - name: Pack Kernel Output
+      - name: Pack AnyKernel3
         run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace
-          mkdir -p output
-          if [ -f out/arch/arm64/boot/Image.gz ]; then
-            cp out/arch/arm64/boot/Image.gz output/
-          fi
-          if [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image output/
-          fi
-          cd output
-          zip -r kernel-5.15-sukisu-susfs.zip ./*
+          git clone https://github.com/osm0sis/AnyKernel3.git --depth=1
+          cp kernel/out/android13-5.15/dist/Image AnyKernel3/
+          sed -i 's/kernel.string=.*/kernel.string=TendouKei-v27.1.2 by FarrizDesignPro BlueArchive KSUN-3.4.0 SUSFS DROID/' AnyKernel3/anykernel.sh
+          cd AnyKernel3
+          zip -r9 ../TendouKei-v27.1.2-FarrizDesignPro-BlueArchive.zip * -x .git*
+          cd ..
+          ls -lh *.zip
 
-      - name: Upload Kernel Artifact
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-5.15-SukiSU-SuSFS
-          path: kernel_workspace/output/kernel-5.15-sukisu-susfs.zip
+          name: TendouKei-v27.1.2-FarrizDesignPro-BlueArchive
+          path: "*.zip"
+
+      - name: Upload to Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: TendouKei-v27.1.2-${{ github.run_number }}
+          name: TendouKei-v27.1.2-FarrizDesignPro-BlueArchive
+          body: |
+            **TendouKei-v27.1.2-FarrizDesignPro-BlueArchive**
+            - Base: vanilla common-android13-5.15
+            - KSUN 3.4.0 + SUSFS latest
+            - Droidspaces kABI support
+            - uname: 5.15-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive
+          files: |
+            *.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
