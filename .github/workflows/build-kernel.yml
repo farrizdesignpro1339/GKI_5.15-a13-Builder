@@ -63,7 +63,7 @@ jobs:
           # 1. balikin gki_defconfig ke vanilla, JANGAN diedit langsung
           git checkout -- arch/arm64/configs/gki_defconfig
           # localversion tetep boleh
-          echo "-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive" > localversion
+          echo "-TendouKei-v27.1.2" > localversion
 
           # 2. suntik via build.config.gki.aarch64
           cat >> ../build.config.gki.aarch64 <<'EOF'
