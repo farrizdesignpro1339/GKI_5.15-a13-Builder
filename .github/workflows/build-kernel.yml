@@ -87,7 +87,6 @@ jobs:
             echo "CONFIG_TMPFS_POSIX_ACL=y" >> ${OUT_DIR}/.config
             echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y" >> ${OUT_DIR}/.config
             echo "CONFIG_IP_SET=y" >> ${OUT_DIR}/.config
-            echo 'CONFIG_LOCALVERSION="-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive"' >> ${OUT_DIR}/.config
             (cd ${OUT_DIR} && make O=${OUT_DIR} olddefconfig)
           }
           EOF
