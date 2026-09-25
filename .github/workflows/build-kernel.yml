@@ -91,6 +91,18 @@ jobs:
           }
           EOF
           cat ../build.config.gki.aarch64 | tail -n 30
+
+      - name: Debug version string
+        run: |
+          cd kernel
+          echo "=== localversion file ==="
+          cat common/localversion || echo "no localversion file"
+          echo "=== grep TendouKei di gki_defconfig ==="
+          grep -r TendouKei common/arch/arm64/configs/gki_defconfig || echo "clean di gki_defconfig"
+          echo "=== grep LOCALVERSION di build.config ==="
+          grep -rn LOCALVERSION build.config.gki.aarch64 common/build.config.gki.aarch64 2>/dev/null || echo "clean di build.config"
+          echo "=== grep POST_DEFCONFIG ==="
+          grep -n TendouKei build.config.gki.aarch64 2>/dev/null || echo "clean POST"    
           
       - name: Build GKI
         run: |
