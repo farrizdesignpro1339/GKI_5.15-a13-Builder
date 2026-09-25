@@ -35,9 +35,9 @@ jobs:
       - name: Inject Droid + KSUN 3.4.0 + SUSFS
         run: |
           cd kernel/common
-          # 1. Droidspaces kABI wajib pertama
           git clone https://github.com/ravindu644/Droidspaces-OSS.git --depth=1 droid-tmp
-          patch -p1 < droid-tmp/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kABI_6_7_8.patch
+          ls droid-tmp/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/
+          patch -p1 < droid-tmp/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
           rm -rf droid-tmp
 
           # 2. KSUN 3.4.0 pin
