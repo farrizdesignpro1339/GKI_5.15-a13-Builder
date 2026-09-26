@@ -103,7 +103,7 @@ jobs:
       - name: Build GKI
         run: |
           cd kernel
-          BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh -j$(nproc --all)
+          BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh -j2
           ls -lh out/android13-5.15/dist/
 
       - name: Pack AnyKernel3
