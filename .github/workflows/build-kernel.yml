@@ -25,11 +25,11 @@ jobs:
           git config --global user.name "farrizdesignpro1339"
           git config --global user.email "farrizdesignpro1339@users.noreply.github.com"
 
-      - name: swap 25G di workspace (bukan / yang penuh!)
+      - name: swap 25G di workspace (bukan parent!)
         run: |
           df -h $GITHUB_WORKSPACE | tail -n 1
-          sudo fallocate -l 25G $GITHUB_WORKSPACE/../swapfile
-          sudo chmod 600 $GITHUB_WORKSPACE/../swapfile; sudo mkswap $GITHUB_WORKSPACE/../swapfile; sudo swapon $GITHUB_WORKSPACE/../swapfile
+          sudo fallocate -l 25G $GITHUB_WORKSPACE/swapfile
+          sudo chmod 600 $GITHUB_WORKSPACE/swapfile; sudo mkswap $GITHUB_WORKSPACE/swapfile; sudo swapon $GITHUB_WORKSPACE/swapfile
           free -h | head -n 2
 
       - name: Sync vanilla android13-5.15
