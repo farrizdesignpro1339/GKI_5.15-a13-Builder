@@ -1,4 +1,4 @@
-name: Build TendouKei-v27.1.2
+name: Build TendouKei-bootimg
 on:
   workflow_dispatch:
 
@@ -25,6 +25,13 @@ jobs:
           git config --global user.name "farrizdesignpro1339"
           git config --global user.email "farrizdesignpro1339@users.noreply.github.com"
 
+      - name: swap 25G (anti OOM 137)
+        run: |
+          sudo fallocate -l 25G /swapfile
+          sudo chmod 600 /swapfile; sudo mkswap /swapfile; sudo swapon /swapfile
+          free -h | head -n 2
+          df -h / | tail -n 1
+
       - name: Sync vanilla android13-5.15
         run: |
           mkdir kernel && cd kernel
@@ -32,46 +39,35 @@ jobs:
           repo sync -c -j$(nproc --all) --no-tags --no-clone-bundle
           ls common/build.config.gki.aarch64
 
-      - name: Inject Droid + KSUN 3.4.0 + SUSFS
+      - name: Inject Droid + KSUN pershoot dev-susfs + SUSFS (tanpa 10_enable!)
         run: |
           cd kernel/common
           git clone https://github.com/ravindu644/Droidspaces-OSS.git --depth=1 droid-tmp
           patch -p1 < droid-tmp/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
           rm -rf droid-tmp
-
           rm -rf drivers/kernelsu
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s v3.4.0
-
+          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android13-5.15 --depth=1 susfs
           cp susfs/kernel_patches/fs/susfs.c fs/
           cp susfs/kernel_patches/include/linux/* include/linux/
-          # kasih || true biar 1 hunk fail gak kill job, sisanya udah masuk
           patch -p1 --fuzz=3 < susfs/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch || true
-          # benerin Hunk #1 namespace.c manual
           grep -q "susfs_def.h" fs/namespace.c || sed -i '/#include <linux\/mnt_idmapping.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' fs/namespace.c
-          grep -q "susfs_def.h" fs/namespace.c && echo "namespace fix OK" || (cat fs/namespace.c.rej; exit 1)
-          patch -p1 --fuzz=3 < susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch || true
+          grep -q "susfs_def.h" fs/proc/task_mmu.c || sed -i '/#include <linux\/pkeys.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' fs/proc/task_mmu.c
           rm -rf susfs
 
-      - name: Config via POST_DEFCONFIG (biar lolos check_defconfig)
+      - name: Config via POST_DEFCONFIG
         run: |
           cd kernel/common
-          # 1. balikin gki_defconfig ke vanilla, JANGAN diedit langsung
           git checkout -- arch/arm64/configs/gki_defconfig
-          # localversion tetep boleh
           echo "-TendouKei-v27.1.2" > localversion
-
-          # 2. suntik via build.config.gki.aarch64
           cat >> ../build.config.gki.aarch64 <<'EOF'
           POST_DEFCONFIG_CMDS="update_extra_config"
           update_extra_config() {
             echo "CONFIG_KSU=y" >> ${OUT_DIR}/.config
             echo "CONFIG_KSU_SUSFS=y" >> ${OUT_DIR}/.config
-            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ${OUT_DIR}/.config
             echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ${OUT_DIR}/.config
             echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ${OUT_DIR}/.config
             echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ${OUT_DIR}/.config
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ${OUT_DIR}/.config
             echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ${OUT_DIR}/.config
             echo "CONFIG_SYSVIPC=y" >> ${OUT_DIR}/.config
             echo "CONFIG_POSIX_MQUEUE=y" >> ${OUT_DIR}/.config
@@ -86,54 +82,37 @@ jobs:
             (cd ${OUT_DIR} && make O=${OUT_DIR} olddefconfig)
           }
           EOF
-          cat ../build.config.gki.aarch64 | tail -n 30
 
-      - name: Debug version string
+      - name: Build GKI serial (anti OOM)
+        env:
+          MAKE_JOBS: 1
+          LLVM_PARALLEL_LINK_JOBS: 1
         run: |
           cd kernel
-          echo "=== localversion file ==="
-          cat common/localversion || echo "no localversion file"
-          echo "=== grep TendouKei di gki_defconfig ==="
-          grep -r TendouKei common/arch/arm64/configs/gki_defconfig || echo "clean di gki_defconfig"
-          echo "=== grep LOCALVERSION di build.config ==="
-          grep -rn LOCALVERSION build.config.gki.aarch64 common/build.config.gki.aarch64 2>/dev/null || echo "clean di build.config"
-          echo "=== grep POST_DEFCONFIG ==="
-          grep -n TendouKei build.config.gki.aarch64 2>/dev/null || echo "clean POST"    
-          
-      - name: Build GKI
-        run: |
-          cd kernel
-          BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh -j2
+          BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh
           ls -lh out/android13-5.15/dist/
 
-      - name: Pack AnyKernel3
-        run: |
-          git clone https://github.com/osm0sis/AnyKernel3.git --depth=1
-          cp kernel/out/android13-5.15/dist/Image AnyKernel3/
-          sed -i 's/kernel.string=.*/kernel.string=TendouKei-v27.1.2 by FarrizDesignPro BlueArchive KSUN-3.4.0 SUSFS DROID/' AnyKernel3/anykernel.sh
-          cd AnyKernel3
-          zip -r9 ../TendouKei-v27.1.2-FarrizDesignPro-BlueArchive.zip * -x .git*
-          cd ..
-          ls -lh *.zip
-
-      - name: Upload Artifact
+      - name: Upload boot.img + Image langsung (tanpa AnyKernel)
         uses: actions/upload-artifact@v4
         with:
-          name: TendouKei-v27.1.2-FarrizDesignPro-BlueArchive
-          path: "*.zip"
+          name: TendouKei-bootimg
+          if-no-files-found: warn
+          path: |
+            kernel/out/android13-5.15/dist/boot.img
+            kernel/out/android13-5.15/dist/Image*
+            kernel/out/android13-5.15/dist/System.map
 
       - name: Upload to Releases
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: TendouKei-v27.1.2-${{ github.run_number }}
-          name: TendouKei-v27.1.2-FarrizDesignPro-BlueArchive
+          tag_name: TendouKei-bootimg-${{ github.run_number }}
+          name: TendouKei-bootimg
           body: |
-            **TendouKei-v27.1.2-FarrizDesignPro-BlueArchive**
+            **TendouKei boot.img langsung (tanpa AnyKernel)**
             - Base: vanilla common-android13-5.15
-            - KSUN 3.4.0 + SUSFS latest
-            - Droidspaces kABI support
-            - uname: 5.15-TendouKei-v27.1.2-FarrizDesignPro-BlueArchive
+            - KSUN pershoot dev-susfs + SUSFS
           files: |
-            *.zip
+            kernel/out/android13-5.15/dist/boot.img
+            kernel/out/android13-5.15/dist/Image.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
