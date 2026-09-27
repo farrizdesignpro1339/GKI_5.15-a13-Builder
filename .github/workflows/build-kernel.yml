@@ -51,7 +51,7 @@ jobs:
           cp susfs/kernel_patches/fs/susfs.c fs/
           cp susfs/kernel_patches/include/linux/* include/linux/
           patch -p1 --fuzz=3 < susfs/kernel_patches/50_add_susfs_in_gki-android13-5.15.patch || true
-          grep -q "susfs_is_current_ksu_domain" fs/namespace.c || sed -i '/#include "internal.h"/i #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25)\n#endif\n' fs/namespace.c
+          grep -q "extern bool susfs_is_current_ksu_domain" fs/namespace.c || sed -i '/#include "internal.h"/i #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\nextern bool susfs_is_current_ksu_domain(void);\nextern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n\n#define CL_COPY_MNT_NS BIT(25)\n#endif\n' fs/namespace.c
           grep -q "susfs_def.h" fs/namespace.c || sed -i '/#include <linux\/mnt_idmapping.h>/a #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs_def.h>\n#endif' fs/namespace.c
           grep -q "linux/susfs.h" fs/namespace.c || sed -i '/#include "pnode.h"/i #ifdef CONFIG_KSU_SUSFS\n#include <linux\/susfs.h>\n#endif\n' fs/namespace.c
           grep -q "susfs_def.h" fs/proc/task_mmu.c || sed -i '/#include <linux\/pkeys.h>/a #if defined(CONFIG_KSU_SUSFS_SUS_KSTAT) || defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux\/susfs_def.h>\n#endif' fs/proc/task_mmu.c
